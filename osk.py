@@ -4,6 +4,8 @@ import os, fcntl, struct, time, sys
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, Gio, GLib
+GLib.set_prgname("simple-osk")
+Gdk.set_program_class("simple-osk")
 HAVE_LS = False
 try:
     gi.require_version("GtkLayerShell", "0.1")
@@ -98,6 +100,34 @@ class Portal:
 
     def close(self): pass
 
+
+# ---- KDE: window rule so KWin never gives this window focus -----------------------
+def ensure_kwin_rule():
+    try:
+        import configparser, uuid
+        path = os.path.expanduser("~/.config/kwinrulesrc")
+        cp = configparser.RawConfigParser(); cp.optionxform = str
+        cp.read(path)
+        if not cp.has_section("General"): cp.add_section("General")
+        ids = [x for x in cp.get("General", "rules", fallback="").split(",") if x]
+        for i in ids:
+            if cp.has_section(i) and cp.get(i, "Description", fallback="") == "Simple OSK":
+                return
+        rid = str(uuid.uuid4()); ids.append(rid)
+        cp.set("General", "rules", ",".join(ids)); cp.set("General", "count", str(len(ids)))
+        cp.add_section(rid)
+        for k, v in dict(Description="Simple OSK", wmclass="simple-osk", wmclassmatch="1",
+                         acceptfocus="false", acceptfocusrule="2", above="true", aboverule="2").items():
+            cp.set(rid, k, v)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f: cp.write(f, space_around_delimiters=False)
+        Gio.bus_get_sync(Gio.BusType.SESSION, None).call_sync(
+            "org.kde.KWin", "/KWin", "org.kde.KWin", "reconfigure", None, None,
+            Gio.DBusCallFlags.NONE, 2000, None)
+        time.sleep(0.5)
+    except Exception:
+        pass
+
 # ---- layout: (label, shifted label, linux keycode, width units) --------------
 def K(l, s, c, w=2): return (l, s, c, w)
 ROWS = [
@@ -187,6 +217,7 @@ def main():
         d.format_secondary_text("\n".join(errs) + "\n\nWhen KDE asks to allow remote control / keyboard input, "
                                 "tap Share or Allow, then start this app again.")
         d.run(); sys.exit(1)
+    ensure_kwin_rule()
     w = OSK(ui); w.show_all(); Gtk.main(); ui.close()
 
 if __name__ == "__main__":

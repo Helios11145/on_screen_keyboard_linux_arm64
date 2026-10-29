@@ -30,7 +30,7 @@ class Uinput:
         dev += struct.pack("256i", *([0] * 256))
         os.write(self.fd, dev)
         fcntl.ioctl(self.fd, UI_DEV_CREATE)
-        time.sleep(0.3)  # let the system notice the new device
+        time.sleep(1.0)  # let the system notice the new device
 
     def _ev(self, t, c, v):
         os.write(self.fd, struct.pack("llHHi", 0, 0, t, c, v))
@@ -151,9 +151,9 @@ button.active { background: #3584e4; color: white; }
 """
 
 class OSK(Gtk.Window):
-    def __init__(self, ui):
+    def __init__(self, ui, name):
         super().__init__(title="Keyboard")
-        self.ui = ui
+        self.ui, self.name = ui, name
         self.mods = {"shift": False, "ctrl": False, "alt": False}
         self.labels = []   # (button, label, shifted)
         self.modbtns = []  # (button, modname)
@@ -184,18 +184,44 @@ class OSK(Gtk.Window):
                 grid.attach(b, x, r, w, 1); x += w
                 self.labels.append((b, label, shifted, code))
                 if code in MODS: self.modbtns.append((b, MODS[code]))
-        self.add(grid)
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        vbox.pack_start(grid, True, True, 0)
+        bar = Gtk.Box(spacing=6)
+        self.status = Gtk.Label(label="Method: %s. Tap a key." % name, xalign=0, margin_start=6)
+        self.swbtn = Gtk.Button(label="Switch method")
+        self.swbtn.set_can_focus(False); self.swbtn.set_focus_on_click(False)
+        self.swbtn.connect("clicked", self.on_switch)
+        bar.pack_start(self.status, True, True, 0); bar.pack_end(self.swbtn, False, False, 4)
+        vbox.pack_start(bar, False, False, 2)
+        self.add(vbox)
         self.connect("destroy", Gtk.main_quit)
 
     def on_key(self, _b, code):
         if code in MODS:
             m = MODS[code]; self.mods[m] = not self.mods[m]; self.refresh(); return
-        held = [MOD_CODE[m] for m, on in self.mods.items() if on]
-        for c in held: self.ui.key(c, True)
-        self.ui.key(code, True); self.ui.key(code, False)
-        for c in reversed(held): self.ui.key(c, False)
+        try:
+            held = [MOD_CODE[m] for m, on in self.mods.items() if on]
+            for c in held: self.ui.key(c, True)
+            self.ui.key(code, True); time.sleep(0.02); self.ui.key(code, False)
+            for c in reversed(held): self.ui.key(c, False)
+            self.status.set_text("Method: %s. Sent key %d." % (self.name, code))
+        except Exception as e:
+            self.status.set_text("Method: %s. ERROR: %s" % (self.name, e))
         if any(self.mods.values()):
             self.mods = {k: False for k in self.mods}; self.refresh()
+
+    def on_switch(self, _b):
+        other = "portal" if self.name == "uinput" else "uinput"
+        self.status.set_text("Switching to %s... (if KDE asks, tap Allow)" % other)
+        while Gtk.events_pending(): Gtk.main_iteration()
+        try:
+            new = Portal() if other == "portal" else Uinput()
+        except Exception as e:
+            self.status.set_text("Could not use %s: %s" % (other, e)); return
+        old = self.ui; self.ui, self.name = new, other
+        try: old.close()
+        except Exception: pass
+        self.status.set_text("Method: %s. Tap a key." % other)
 
     def refresh(self):
         s = self.mods["shift"]
@@ -207,9 +233,9 @@ class OSK(Gtk.Window):
             (ctx.add_class if self.mods[m] else ctx.remove_class)("active")
 
 def main():
-    ui = None; errs = []
+    ui = None; errs = []; name = ""
     for B in (Uinput, Portal):
-        try: ui = B(); break
+        try: ui = B(); name = B.__name__.lower(); break
         except Exception as e: errs.append("%s: %s" % (B.__name__, e))
     if ui is None:
         d = Gtk.MessageDialog(text="Can't send key presses", message_type=Gtk.MessageType.ERROR,
@@ -218,7 +244,7 @@ def main():
                                 "tap Share or Allow, then start this app again.")
         d.run(); sys.exit(1)
     ensure_kwin_rule()
-    w = OSK(ui); w.show_all(); Gtk.main(); ui.close()
+    w = OSK(ui, name); w.show_all(); Gtk.main(); ui.close()
 
 if __name__ == "__main__":
     main()
